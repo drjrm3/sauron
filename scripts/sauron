@@ -1,0 +1,116 @@
+#!/usr/bin/env bash
+
+datadir=""
+imgname=""
+r_num=""
+g_num=""
+tmpdir=""
+outdir=""
+nMB="500"
+project_name="sauron"
+job_name="sauron"
+nZs=100
+
+usage() {
+cat << EOF
+    Usage: sauron -d datadir -i imgname -r r_num -g g_num -t tmpdir -o outdir
+                 [-M nMB] [-P project_name] [-J job_name] [-Z nZs] [-h]
+    datadir ........ Directory where input .tif files are located
+    imgname ........ Base name of .tif files (without R/G specified suffixes)
+    r_num .......... Name of red signal (ex. A640)
+    g_num .......... Name of green signal (ex. A488)
+    tmpdir ......... Location where temporary data should be stored
+    imgdir ......... Location where final cell images should be stored
+    nMB ............ Number of MB to be requested from LSF (default: $nMB)
+    project_name ... Project name to submit with (default: $project_name)
+    jobname ........ Job name to submit with (default: $job_name)
+    nZs ............ Number of Z stacks (default: $nZs)
+EOF
+}
+
+#######################
+### Read the inputs ###
+#######################
+while [[ ! -z $1 ]]; do
+	case $1 in
+		-h) usage && exit 0; shift;;
+		-d) datadir=$2; shift;;
+		-i) imgname=$2; shift;;
+		-r) r_num=$2; shift;;
+		-g) g_num=$2; shift;;
+		-t) tmpdir=$2; shift;;
+		-o) outdir=$2; shift;;
+		-M) nMB=$2; shift;;
+		-P) project_name=$2; shift;;
+		-J) job_name=$2; shift;;
+		-Z) nZs=$2; shift;;
+	esac
+	shift
+done
+
+#######################
+### Validate inputs ###
+#######################
+if [[ ! -d $datadir || ! $imgname || ! $r_num || ! $g_num || ! $tmpdir || ! $outdir ]]; then
+	>&2 echo "ERROR: Not all arguments have values"
+	echo "datadir: $datadir"
+	echo "imgname: $imgname"
+	echo "r_num: $r_num"
+	echo "g_num: $g_num"
+	echo "tmpdir: $tmpdir"
+	echo "outdir: $outdir"
+	usage
+	exit 1
+fi
+
+# TODO: Validate that python3 is available
+# TODO: Validate that 'saruman' is in the path
+
+############################################################
+### Define *.tif file names and validate that they exist ###
+############################################################
+red_file=$datadir/${imgname}_${r_num}.tif
+if [[ ! -f $red_file ]]; then
+	>&2 echo "ERROR: Red file '$red_file' DNE"
+	usage
+	exit 1
+fi
+green_file=$datadir/${imgname}_${g_num}.tif
+if [[ ! -f $green_file ]]; then
+	>&2 echo "ERROR: Red file '$green_file' DNE"
+	usage
+	exit 1
+fi
+
+#############################################################################
+### Create tmpdir / outdir and warn that these should be new upon running ###
+#############################################################################
+if [[ -d $tmpdir ]]; then
+	>&2 echo "WARNING: tmpdir '$tmpdir' exists. Recommend removing before running."
+else
+	mkdir -p $tmpdir
+fi
+
+if [[ -d $outdir ]]; then
+	>&2 echo "WARNING: outdir '$outdir' exists. Recommend removing before running."
+else
+	mkdir -p $outdir
+fi
+
+########################
+### Run the analysis ###
+########################
+mkdir -p $outdir/logs
+
+LSF_ID=`type lsid 2>/dev/null`
+if [[ $? -ne 0 ]]; then
+	for iz in $(seq $nZs); do
+		echo "saruman -r $red_file -g $green_file -z $iz -t $tmpdir -o $outdir 1> $outdir/logs/out.$iz.txt 2> $outdir/logs/err.$iz.txt"
+	done > cmdfile.txt
+	parallel < cmdfile.txt
+else
+	LSF_JOBID=$(bsub -P $project_name -J $job_name[1-$nZs] -R "rusage[mem=$nMB]" -oo $outdir/logs/out.%J.%I.txt -eo $outdir/logs/err.%J.%I.txt "saruman -r $red_file -g $green_file -z \$LSB_JOBINDEX -t $tmpdir -o $outdir" | sed 's/Job <//g' | sed 's/>.*//g')
+fi
+
+
+
